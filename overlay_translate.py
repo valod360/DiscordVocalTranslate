@@ -1,3 +1,32 @@
+import os
+from pathlib import Path
+
+# =========================================================
+# CACHE HUGGING FACE WINDOWS
+# Pas de symlinks -> fonctionne sans admin / Developer Mode
+# =========================================================
+
+APPDATA = os.getenv(
+    "LOCALAPPDATA",
+    str(Path.home())
+)
+
+HF_CACHE = (
+    Path(APPDATA)
+    / "ValodTranslator"
+    / "huggingface"
+)
+
+HF_CACHE.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+os.environ["HF_HOME"] = str(HF_CACHE)
+os.environ["HF_HUB_CACHE"] = str(HF_CACHE / "hub")
+os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
 import html
 import io
 import json

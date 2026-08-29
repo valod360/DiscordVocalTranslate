@@ -1,19 +1,42 @@
+# =========================================================
+# VALOD TRANSLATOR
+# made by valod
+# =========================================================
+
+# =========================================================
+# IMPORTANT :
+# Les variables Hugging Face doivent être définies AVANT
+# d'importer transformers / faster_whisper / huggingface_hub.
+# =========================================================
+
 import os
 from pathlib import Path
 
-# =========================================================
-# CACHE HUGGING FACE WINDOWS
-# Pas de symlinks -> fonctionne sans admin / Developer Mode
-# =========================================================
 
-APPDATA = os.getenv(
-    "LOCALAPPDATA",
-    str(Path.home())
+LOCAL_APPDATA = Path(
+    os.getenv(
+        "LOCALAPPDATA",
+        str(Path.home())
+    )
 )
 
-HF_CACHE = (
-    Path(APPDATA)
+APP_DIR = (
+    LOCAL_APPDATA
     / "ValodTranslator"
+)
+
+APP_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# =========================================================
+# CACHE HUGGING FACE WINDOWS
+# =========================================================
+
+HF_CACHE = (
+    APP_DIR
     / "huggingface"
 )
 
@@ -22,15 +45,28 @@ HF_CACHE.mkdir(
     exist_ok=True
 )
 
-os.environ["HF_HOME"] = str(HF_CACHE)
-os.environ["HF_HUB_CACHE"] = str(HF_CACHE / "hub")
+os.environ["HF_HOME"] = str(
+    HF_CACHE
+)
+
+os.environ["HF_HUB_CACHE"] = str(
+    HF_CACHE / "hub"
+)
+
+# Évite les symlinks Windows nécessitant certains privilèges
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
+
+# Supprime le warning associé
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
+
+# =========================================================
+# IMPORTS
+# =========================================================
 
 import html
 import io
 import json
-import os
 import queue
 import signal
 import sys
@@ -38,7 +74,6 @@ import threading
 import time
 import wave
 
-from pathlib import Path
 from collections import deque
 
 import numpy as np
@@ -48,10 +83,24 @@ import torch
 from proctap import ProcessAudioCapture
 
 from faster_whisper import WhisperModel
-from silero_vad import load_silero_vad, get_speech_timestamps
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
-from PySide6.QtCore import Qt, QObject, Signal, QTimer
+from silero_vad import (
+    load_silero_vad,
+    get_speech_timestamps,
+)
+
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSeq2SeqLM,
+)
+
+from PySide6.QtCore import (
+    Qt,
+    QObject,
+    Signal,
+    QTimer,
+)
+
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
@@ -61,6 +110,7 @@ from PySide6.QtGui import (
     QPainter,
     QPixmap,
 )
+
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -72,22 +122,28 @@ from PySide6.QtWidgets import (
 
 
 # =========================================================
-# VALOD TRANSLATOR
-# Discord-only process capture
+# VERSION
 # =========================================================
+
+APP_NAME = "Valod Translator"
+APP_VERSION = "0.1.2"
 
 
 # =========================================================
 # AUDIO
-# ProcTap fournit du 48 kHz / stéréo / float32
 # =========================================================
 
 RATE = 48000
 CHANNELS = 2
-SAMPLE_WIDTH = 2  # après conversion float32 -> int16
+SAMPLE_WIDTH = 2  # int16 après conversion
 
 BLOCK_MS = 250
-BLOCK_FRAMES = int(RATE * BLOCK_MS / 1000)
+
+BLOCK_FRAMES = int(
+    RATE
+    * BLOCK_MS
+    / 1000
+)
 
 BYTES_PER_BLOCK = (
     BLOCK_FRAMES
@@ -97,20 +153,26 @@ BYTES_PER_BLOCK = (
 
 
 # =========================================================
-# DÉTECTION DE PHRASES
+# DÉTECTION DES PHRASES
 # =========================================================
 
 END_SILENCE_MS = 700
+
 PRE_ROLL_MS = 500
+
 MAX_PHRASE_MS = 12000
 
 
 # =========================================================
-# IA
+# MODÈLES
 # =========================================================
 
 WHISPER_MODEL = "turbo"
-TRANSLATION_MODEL = "facebook/nllb-200-distilled-600M"
+
+TRANSLATION_MODEL = (
+    "facebook/"
+    "nllb-200-distilled-600M"
+)
 
 
 # =========================================================
@@ -121,27 +183,13 @@ MAX_SUBTITLES = 3
 
 OVERLAY_WIDTH = 1100
 OVERLAY_HEIGHT = 310
+
 BOTTOM_MARGIN = 130
 
 
 # =========================================================
 # CONFIG
 # =========================================================
-
-APPDATA = os.getenv(
-    "APPDATA",
-    str(Path.home())
-)
-
-APP_DIR = (
-    Path(APPDATA)
-    / "ValodTranslator"
-)
-
-APP_DIR.mkdir(
-    parents=True,
-    exist_ok=True
-)
 
 CONFIG_FILE = (
     APP_DIR
@@ -154,9 +202,13 @@ CONFIG_FILE = (
 # =========================================================
 
 DISCORD_NAMES = {
+
     "discord.exe",
+
     "discordptb.exe",
+
     "discordcanary.exe",
+
     "discorddevelopment.exe",
 }
 
@@ -168,47 +220,71 @@ DISCORD_NAMES = {
 LANGUAGES = {
 
     "es": {
+
         "name": "Espagnol",
+
         "short": "ES",
+
         "whisper": "es",
+
         "nllb": "spa_Latn",
+
         "flag": "🇪🇸",
     },
 
+
     "fr": {
+
         "name": "Français",
+
         "short": "FR",
+
         "whisper": "fr",
+
         "nllb": "fra_Latn",
+
         "flag": "🇫🇷",
     },
 
+
     "en": {
+
         "name": "Anglais",
+
         "short": "EN",
+
         "whisper": "en",
+
         "nllb": "eng_Latn",
+
         "flag": "🇬🇧",
     },
 }
 
 
 # =========================================================
-# CONFIG
+# CONFIGURATION
 # =========================================================
 
 def load_config():
 
     default = {
+
         "source": "es",
+
         "target": "fr",
+
         "locked": True,
+
         "x": None,
+
         "y": None,
     }
 
     if not CONFIG_FILE.exists():
+
         return default
+
 
     try:
 
@@ -218,12 +294,22 @@ def load_config():
             encoding="utf-8"
         ) as f:
 
-            saved = json.load(f)
+            saved = json.load(
+                f
+            )
 
-        default.update(saved)
+        default.update(
+            saved
+        )
 
-    except Exception:
-        pass
+
+    except Exception as e:
+
+        print(
+            "⚠️ Erreur config :",
+            e
+        )
+
 
     return default
 
@@ -242,25 +328,32 @@ def save_config():
         ) as f:
 
             json.dump(
+
                 config,
+
                 f,
+
                 indent=4,
+
                 ensure_ascii=False
             )
+
 
     except Exception as e:
 
         print(
-            "Erreur config :",
+            "⚠️ Erreur sauvegarde config :",
             e
         )
 
 
 # =========================================================
-# LANGUE COURANTE
+# DIRECTION DE TRADUCTION
 # =========================================================
 
-direction_lock = threading.Lock()
+direction_lock = (
+    threading.Lock()
+)
 
 
 def get_direction():
@@ -268,8 +361,10 @@ def get_direction():
     with direction_lock:
 
         return (
+
             config["source"],
-            config["target"]
+
+            config["target"],
         )
 
 
@@ -277,7 +372,9 @@ def get_direction():
 # SIGNAUX QT
 # =========================================================
 
-class SubtitleSignals(QObject):
+class SubtitleSignals(
+    QObject
+):
 
     translation_ready = Signal(
         str,
@@ -286,7 +383,9 @@ class SubtitleSignals(QObject):
         str
     )
 
-    status_changed = Signal(str)
+    status_changed = Signal(
+        str
+    )
 
     direction_changed = Signal(
         str,
@@ -305,56 +404,83 @@ def set_direction(
     with direction_lock:
 
         config["source"] = source
+
         config["target"] = target
 
+
     save_config()
+
 
     signals.direction_changed.emit(
         source,
         target
     )
 
+
+    print()
+
     print(
-        f"\n🔄 {source.upper()} → "
-        f"{target.upper()}\n"
+        "🔄 Traduction :",
+        source.upper(),
+        "→",
+        target.upper()
     )
+
+    print()
 
 
 # =========================================================
 # OVERLAY
 # =========================================================
 
-class SubtitleOverlay(QWidget):
+class SubtitleOverlay(
+    QWidget
+):
 
-    def __init__(self):
+    def __init__(
+        self
+    ):
 
         super().__init__()
+
 
         self.history = deque(
             maxlen=MAX_SUBTITLES
         )
+
 
         self.locked = config.get(
             "locked",
             True
         )
 
+
         self.drag_offset = None
 
 
+        # =================================================
+        # FENÊTRE
+        # =================================================
+
         self.setWindowFlags(
+
             Qt.FramelessWindowHint
+
             | Qt.WindowStaysOnTopHint
+
             | Qt.Tool
         )
+
 
         self.setAttribute(
             Qt.WA_TranslucentBackground
         )
 
+
         self.setAttribute(
             Qt.WA_ShowWithoutActivating
         )
+
 
         self.resize(
             OVERLAY_WIDTH,
@@ -368,6 +494,7 @@ class SubtitleOverlay(QWidget):
 
         layout = QVBoxLayout()
 
+
         layout.setContentsMargins(
             35,
             20,
@@ -375,7 +502,10 @@ class SubtitleOverlay(QWidget):
             14
         )
 
-        layout.setSpacing(6)
+
+        layout.setSpacing(
+            6
+        )
 
 
         # =================================================
@@ -384,20 +514,27 @@ class SubtitleOverlay(QWidget):
 
         self.mode_label = QLabel()
 
+
         self.mode_label.setAlignment(
             Qt.AlignCenter
         )
+
 
         mode_font = QFont(
             "Segoe UI",
             11
         )
 
-        mode_font.setBold(True)
+
+        mode_font.setBold(
+            True
+        )
+
 
         self.mode_label.setFont(
             mode_font
         )
+
 
         layout.addWidget(
             self.mode_label
@@ -405,31 +542,39 @@ class SubtitleOverlay(QWidget):
 
 
         # =================================================
-        # SOUS TITRES
+        # SOUS-TITRES
         # =================================================
 
         self.subtitle_label = QLabel(
             "Chargement..."
         )
 
+
         self.subtitle_label.setWordWrap(
             True
         )
 
+
         self.subtitle_label.setAlignment(
             Qt.AlignCenter
         )
+
 
         subtitle_font = QFont(
             "Segoe UI",
             22
         )
 
-        subtitle_font.setBold(True)
+
+        subtitle_font.setBold(
+            True
+        )
+
 
         self.subtitle_label.setFont(
             subtitle_font
         )
+
 
         layout.addWidget(
             self.subtitle_label
@@ -441,23 +586,30 @@ class SubtitleOverlay(QWidget):
         # =================================================
 
         self.credit_label = QLabel(
-            "made by valod"
+            f"made by valod • v{APP_VERSION}"
         )
+
 
         self.credit_label.setAlignment(
             Qt.AlignCenter
         )
+
 
         credit_font = QFont(
             "Segoe UI",
             9
         )
 
-        credit_font.setItalic(True)
+
+        credit_font.setItalic(
+            True
+        )
+
 
         self.credit_label.setFont(
             credit_font
         )
+
 
         self.credit_label.setStyleSheet(
             """
@@ -469,11 +621,15 @@ class SubtitleOverlay(QWidget):
             """
         )
 
+
         layout.addWidget(
             self.credit_label
         )
 
-        self.setLayout(layout)
+
+        self.setLayout(
+            layout
+        )
 
 
         # =================================================
@@ -484,9 +640,11 @@ class SubtitleOverlay(QWidget):
             self.add_translation
         )
 
+
         signals.status_changed.connect(
             self.set_status
         )
+
 
         signals.direction_changed.connect(
             self.change_direction
@@ -498,29 +656,42 @@ class SubtitleOverlay(QWidget):
         # =================================================
 
         if (
+
             config.get("x") is not None
-            and config.get("y") is not None
+
+            and
+
+            config.get("y") is not None
         ):
 
             self.move(
+
                 config["x"],
+
                 config["y"]
             )
+
 
         else:
 
             QTimer.singleShot(
+
                 100,
+
                 self.move_to_bottom
             )
 
 
-        source, target = get_direction()
+        source, target = (
+            get_direction()
+        )
+
 
         self.change_direction(
             source,
             target
         )
+
 
         self.apply_lock_state()
 
@@ -529,32 +700,51 @@ class SubtitleOverlay(QWidget):
     # STYLE
     # =====================================================
 
-    def update_style(self):
+    def update_style(
+        self
+    ):
 
-        border = (
-            "none"
-            if self.locked
-            else "2px solid rgba(80,180,255,230)"
-        )
+        if self.locked:
+
+            border = "none"
+
+        else:
+
+            border = (
+                "2px solid "
+                "rgba(80,180,255,230)"
+            )
+
 
         self.subtitle_label.setStyleSheet(
             f"""
             QLabel {{
                 color: white;
-                background-color: rgba(0,0,0,185);
+
+                background-color:
+                    rgba(0,0,0,185);
+
                 border-radius: 18px;
+
                 border: {border};
+
                 padding: 20px 30px;
             }}
             """
         )
 
+
         self.mode_label.setStyleSheet(
             """
             QLabel {
-                color: rgba(255,255,255,220);
-                background-color: rgba(0,0,0,150);
+                color:
+                    rgba(255,255,255,220);
+
+                background-color:
+                    rgba(0,0,0,150);
+
                 border-radius: 10px;
+
                 padding: 5px 15px;
             }
             """
@@ -565,14 +755,21 @@ class SubtitleOverlay(QWidget):
     # LOCK
     # =====================================================
 
-    def apply_lock_state(self):
+    def apply_lock_state(
+        self
+    ):
 
         self.setWindowFlag(
+
             Qt.WindowTransparentForInput,
+
             self.locked
         )
 
+
         self.update_style()
+
+
         self.show()
 
 
@@ -583,9 +780,14 @@ class SubtitleOverlay(QWidget):
 
         self.locked = locked
 
-        config["locked"] = locked
+
+        config["locked"] = (
+            locked
+        )
+
 
         save_config()
+
 
         self.apply_lock_state()
 
@@ -600,14 +802,30 @@ class SubtitleOverlay(QWidget):
     ):
 
         if self.locked:
+
             return
 
-        if event.button() == Qt.LeftButton:
+
+        if (
+            event.button()
+            == Qt.LeftButton
+        ):
 
             self.drag_offset = (
-                event.globalPosition().toPoint()
-                - self.frameGeometry().topLeft()
+
+                event
+                .globalPosition()
+                .toPoint()
+
+                -
+
+                self
+                .frameGeometry()
+                .topLeft()
             )
+
+
+            event.accept()
 
 
     def mouseMoveEvent(
@@ -616,17 +834,35 @@ class SubtitleOverlay(QWidget):
     ):
 
         if (
+
             self.locked
-            or self.drag_offset is None
+
+            or
+
+            self.drag_offset is None
         ):
+
             return
 
-        if event.buttons() & Qt.LeftButton:
+
+        if (
+            event.buttons()
+            & Qt.LeftButton
+        ):
 
             self.move(
-                event.globalPosition().toPoint()
-                - self.drag_offset
+
+                event
+                .globalPosition()
+                .toPoint()
+
+                -
+
+                self.drag_offset
             )
+
+
+            event.accept()
 
 
     def mouseReleaseEvent(
@@ -635,50 +871,91 @@ class SubtitleOverlay(QWidget):
     ):
 
         if self.locked:
+
             return
 
-        if event.button() == Qt.LeftButton:
+
+        if (
+            event.button()
+            == Qt.LeftButton
+        ):
 
             self.drag_offset = None
 
-            config["x"] = self.x()
-            config["y"] = self.y()
+
+            config["x"] = (
+                self.x()
+            )
+
+            config["y"] = (
+                self.y()
+            )
+
 
             save_config()
 
 
+            event.accept()
+
+
     # =====================================================
-    # POSITION
+    # RECENTRER
     # =====================================================
 
-    def move_to_bottom(self):
+    def move_to_bottom(
+        self
+    ):
 
-        screen = QApplication.primaryScreen()
+        screen = (
+            QApplication.primaryScreen()
+        )
+
 
         if not screen:
+
             return
 
-        geometry = screen.availableGeometry()
+
+        geometry = (
+            screen.availableGeometry()
+        )
+
 
         x = (
+
             geometry.x()
-            + (
+
+            +
+
+            (
                 geometry.width()
                 - self.width()
             ) // 2
         )
 
+
         y = (
+
             geometry.y()
+
             + geometry.height()
+
             - self.height()
+
             - BOTTOM_MARGIN
         )
 
-        self.move(x, y)
+
+        self.move(
+            x,
+            y
+        )
+
 
         config["x"] = x
+
         config["y"] = y
+
 
         save_config()
 
@@ -695,14 +972,27 @@ class SubtitleOverlay(QWidget):
 
         self.history.clear()
 
-        src = LANGUAGES[source]
-        dst = LANGUAGES[target]
+
+        src = LANGUAGES[
+            source
+        ]
+
+        dst = LANGUAGES[
+            target
+        ]
+
 
         self.mode_label.setText(
-            f"{src['flag']} {src['short']}"
-            f"  →  "
-            f"{dst['flag']} {dst['short']}"
+
+            f"{src['flag']} "
+            f"{src['short']}"
+
+            "  →  "
+
+            f"{dst['flag']} "
+            f"{dst['short']}"
         )
+
 
         self.subtitle_label.setText(
             "En attente de Discord..."
@@ -726,7 +1016,7 @@ class SubtitleOverlay(QWidget):
 
 
     # =====================================================
-    # TRADUCTION
+    # TRADUCTION AFFICHÉE
     # =====================================================
 
     def add_translation(
@@ -741,21 +1031,31 @@ class SubtitleOverlay(QWidget):
             get_direction()
         )
 
+
         if (
+
             source != current_source
-            or target != current_target
+
+            or
+
+            target != current_target
         ):
+
             return
+
 
         self.history.append(
             translated
         )
 
+
         lines = []
+
 
         history = list(
             self.history
         )
+
 
         for i, sentence in enumerate(
             history
@@ -765,82 +1065,163 @@ class SubtitleOverlay(QWidget):
                 sentence
             )
 
-            if i < len(history) - 1:
+
+            if (
+                i
+                < len(history) - 1
+            ):
 
                 lines.append(
+
                     '<span style="'
+
                     'font-size:17px;'
-                    'color:#BBBBBB;">'
+
+                    'color:#BBBBBB;'
+
+                    '">'
+
                     f'{sentence}'
+
                     '</span>'
                 )
+
 
             else:
 
                 lines.append(
+
                     '<span style="'
+
                     'font-size:24px;'
-                    'color:white;">'
+
+                    'color:white;'
+
+                    '">'
+
                     f'{sentence}'
+
                     '</span>'
                 )
 
+
         self.subtitle_label.setText(
-            "<br>".join(lines)
+
+            "<br>".join(
+                lines
+            )
         )
 
 
 # =========================================================
-# GPU
+# HARDWARE
 # =========================================================
 
-USE_CUDA = torch.cuda.is_available()
-
-TORCH_DEVICE = (
-    "cuda"
-    if USE_CUDA
-    else "cpu"
+CUDA_AVAILABLE = (
+    torch.cuda.is_available()
 )
 
-TORCH_DTYPE = (
-    torch.float16
-    if USE_CUDA
-    else torch.float32
-)
 
-WHISPER_DEVICE = (
-    "cuda"
-    if USE_CUDA
-    else "cpu"
-)
+GPU_NAME = None
 
-WHISPER_COMPUTE = (
-    "float16"
-    if USE_CUDA
-    else "int8"
-)
+GPU_MAJOR = 0
+GPU_MINOR = 0
 
+GPU_VRAM_GB = 0
+
+
+if CUDA_AVAILABLE:
+
+    try:
+
+        GPU_NAME = (
+            torch.cuda.get_device_name(
+                0
+            )
+        )
+
+
+        GPU_MAJOR, GPU_MINOR = (
+            torch.cuda.get_device_capability(
+                0
+            )
+        )
+
+
+        GPU_VRAM_GB = (
+
+            torch.cuda.get_device_properties(
+                0
+            ).total_memory
+
+            / 1024**3
+        )
+
+
+    except Exception as e:
+
+        print(
+            "⚠️ Erreur détection GPU :",
+            e
+        )
+
+        CUDA_AVAILABLE = False
+
+
+# =========================================================
+# INFO
+# =========================================================
 
 print()
-print("========================================")
-print("VALOD TRANSLATOR")
-print("made by valod")
-print("========================================")
+
+print(
+    "========================================"
+)
+
+print(
+    "VALOD TRANSLATOR"
+)
+
+print(
+    f"Version {APP_VERSION}"
+)
+
+print(
+    "made by valod"
+)
+
+print(
+    "========================================"
+)
+
 print()
 
 
-if USE_CUDA:
+if CUDA_AVAILABLE:
 
     print(
-        "GPU :",
-        torch.cuda.get_device_name(0)
+        "GPU détecté :",
+        GPU_NAME
+    )
+
+    print(
+        "Compute Capability :",
+        f"{GPU_MAJOR}.{GPU_MINOR}"
+    )
+
+    print(
+        "VRAM :",
+        f"{GPU_VRAM_GB:.1f} Go"
     )
 
 else:
 
     print(
-        "⚠️ Pas de CUDA, utilisation CPU."
+        "GPU CUDA compatible non détecté."
     )
+
+
+print()
 
 
 # =========================================================
@@ -851,30 +1232,176 @@ print(
     "Chargement de Whisper..."
 )
 
-whisper = WhisperModel(
-    WHISPER_MODEL,
-    device=WHISPER_DEVICE,
-    compute_type=WHISPER_COMPUTE
-)
 
-print(
-    "Whisper ✅"
-)
+whisper = None
 
 
 # =========================================================
-# SILERO
+# GPU MODERNE
+# =========================================================
+
+if (
+    CUDA_AVAILABLE
+    and GPU_MAJOR >= 7
+):
+
+    try:
+
+        print(
+            "Mode Whisper choisi : "
+            "CUDA float16"
+        )
+
+
+        whisper = WhisperModel(
+
+            WHISPER_MODEL,
+
+            device="cuda",
+
+            compute_type="float16"
+        )
+
+
+        print(
+            "Whisper CUDA float16 ✅"
+        )
+
+
+    except Exception as e:
+
+        print(
+            "⚠️ CUDA float16 impossible :",
+            e
+        )
+
+        whisper = None
+
+
+# =========================================================
+# GPU PLUS ANCIEN
+# GTX 1060 = Compute Capability 6.1
+# =========================================================
+
+if (
+    whisper is None
+    and CUDA_AVAILABLE
+):
+
+    try:
+
+        print(
+            "Mode Whisper choisi : "
+            "CUDA int8"
+        )
+
+
+        whisper = WhisperModel(
+
+            WHISPER_MODEL,
+
+            device="cuda",
+
+            compute_type="int8"
+        )
+
+
+        print(
+            "Whisper CUDA int8 ✅"
+        )
+
+
+    except Exception as e:
+
+        print(
+            "⚠️ CUDA int8 impossible :",
+            e
+        )
+
+        whisper = None
+
+
+# =========================================================
+# FALLBACK CPU
+# =========================================================
+
+if whisper is None:
+
+    print(
+        "Fallback Whisper : CPU int8"
+    )
+
+
+    whisper = WhisperModel(
+
+        WHISPER_MODEL,
+
+        device="cpu",
+
+        compute_type="int8"
+    )
+
+
+    print(
+        "Whisper CPU int8 ✅"
+    )
+
+
+# =========================================================
+# SILERO VAD
 # =========================================================
 
 print(
     "Chargement de Silero VAD..."
 )
 
-vad_model = load_silero_vad()
+
+vad_model = (
+    load_silero_vad()
+)
+
 
 print(
     "Silero VAD ✅"
 )
+
+
+# =========================================================
+# NLLB - CHOIX DU MATÉRIEL
+# =========================================================
+
+# Pour les GPU modernes avec suffisamment de VRAM,
+# NLLB tourne sur le GPU.
+#
+# GTX 1060 et GPU anciens :
+# NLLB sur CPU pour éviter FP16 lent / VRAM insuffisante.
+
+TRANSLATOR_USE_CUDA = (
+
+    CUDA_AVAILABLE
+
+    and GPU_MAJOR >= 7
+
+    and GPU_VRAM_GB >= 6
+)
+
+
+if TRANSLATOR_USE_CUDA:
+
+    TRANSLATOR_DEVICE = "cuda"
+
+    TRANSLATOR_DTYPE = (
+        torch.float16
+    )
+
+
+else:
+
+    TRANSLATOR_DEVICE = "cpu"
+
+    TRANSLATOR_DTYPE = (
+        torch.float32
+    )
 
 
 # =========================================================
@@ -885,26 +1412,61 @@ print(
     "Chargement de NLLB..."
 )
 
-translator = (
-    AutoModelForSeq2SeqLM
-    .from_pretrained(
-        TRANSLATION_MODEL,
-        dtype=TORCH_DTYPE
+
+if TRANSLATOR_USE_CUDA:
+
+    print(
+        "Mode NLLB : GPU float16"
     )
-    .to(TORCH_DEVICE)
+
+else:
+
+    print(
+        "Mode NLLB : CPU float32"
+    )
+
+
+translator = (
+
+    AutoModelForSeq2SeqLM
+
+    .from_pretrained(
+
+        TRANSLATION_MODEL,
+
+        dtype=TRANSLATOR_DTYPE
+    )
+
+    .to(
+        TRANSLATOR_DEVICE
+    )
 )
+
 
 translator.eval()
 
 
+# =========================================================
+# TOKENIZERS
+# =========================================================
+
 tokenizers = {}
 
-for code, language in LANGUAGES.items():
+
+for code, language in (
+    LANGUAGES.items()
+):
 
     tokenizers[code] = (
-        AutoTokenizer.from_pretrained(
+
+        AutoTokenizer
+
+        .from_pretrained(
+
             TRANSLATION_MODEL,
-            src_lang=language["nllb"]
+
+            src_lang=
+                language["nllb"]
         )
     )
 
@@ -915,23 +1477,32 @@ print(
 
 
 # =========================================================
-# TROUVER LE ROOT DISCORD
+# TROUVER LE PROCESSUS RACINE DISCORD
 # =========================================================
 
 def find_discord_root():
 
     candidates = []
 
+
     for proc in psutil.process_iter(
-        ["pid", "ppid", "name"]
+
+        [
+            "pid",
+            "ppid",
+            "name",
+        ]
     ):
 
         try:
 
             name = (
+
                 proc.info["name"]
+
                 or ""
             ).lower()
+
 
             if name in DISCORD_NAMES:
 
@@ -939,8 +1510,11 @@ def find_discord_root():
                     proc
                 )
 
+
         except (
+
             psutil.NoSuchProcess,
+
             psutil.AccessDenied
         ):
 
@@ -948,31 +1522,36 @@ def find_discord_root():
 
 
     if not candidates:
+
         return None
 
 
     ids = {
+
         proc.pid
+
         for proc in candidates
     }
 
 
     roots = []
 
+
     for proc in candidates:
 
         try:
 
-            if proc.ppid() not in ids:
+            if (
+                proc.ppid()
+                not in ids
+            ):
 
                 roots.append(
                     proc
                 )
 
-        except (
-            psutil.NoSuchProcess,
-            psutil.AccessDenied
-        ):
+
+        except Exception:
 
             pass
 
@@ -982,25 +1561,32 @@ def find_discord_root():
         roots = candidates
 
 
-    # Choisit le Discord racine possédant
-    # le plus de descendants Discord.
-
-    def score(proc):
+    def score(
+        proc
+    ):
 
         try:
 
-            children = proc.children(
-                recursive=True
+            children = (
+                proc.children(
+                    recursive=True
+                )
             )
 
+
             return sum(
+
                 1
-                for child in children
+
+                for child
+                in children
+
                 if (
                     child.name().lower()
                     in DISCORD_NAMES
                 )
             )
+
 
         except Exception:
 
@@ -1014,35 +1600,125 @@ def find_discord_root():
 
 
 # =========================================================
-# CONVERSION FLOAT32 -> INT16
+# CALLBACK PROCTAP
 # =========================================================
 
-def float32_to_int16(
-    pcm
+def convert_proctap_audio(
+    pcm,
+    frames
 ):
 
-    audio = np.frombuffer(
-        pcm,
-        dtype=np.float32
-    )
+    if not pcm:
+        return None
 
-    audio = np.clip(
-        audio,
-        -1.0,
-        1.0
-    )
+    try:
+        # ProcessAudioCapture renvoie toujours du PCM
+        # 48 kHz / stéréo / float32.
+        #
+        # Le paramètre "frames" vaut actuellement -1
+        # dans ProcTap, donc on l'ignore volontairement.
 
-    audio = (
-        audio * 32767.0
-    ).astype(
-        np.int16
-    )
+        audio = np.frombuffer(
+            pcm,
+            dtype=np.float32
+        )
 
-    return audio.tobytes()
+        if audio.size == 0:
+            return None
+
+        # Sécurité contre d'éventuelles valeurs
+        # légèrement hors de [-1.0 ; +1.0]
+        audio = np.clip(
+            audio,
+            -1.0,
+            1.0
+        )
+
+        # float32 -> PCM int16
+        audio_int16 = (
+            audio * 32767.0
+        ).astype(
+            np.int16
+        )
+
+        return audio_int16.tobytes()
+
+    except Exception as e:
+
+        print(
+            "⚠️ Erreur conversion audio ProcTap :",
+            e
+        )
+
+        return None
+
+        # =================================================
+        # FLOAT32 STÉRÉO
+        # 2 canaux × 4 octets = 8 octets/frame
+        # =================================================
+
+        if bytes_per_frame == 8:
+
+            audio = np.frombuffer(
+                pcm,
+                dtype=np.float32
+            )
+
+
+            audio = np.clip(
+                audio,
+                -1.0,
+                1.0
+            )
+
+
+            audio = (
+
+                audio
+                * 32767.0
+
+            ).astype(
+                np.int16
+            )
+
+
+            return audio.tobytes()
+
+
+        # =================================================
+        # INT16 STÉRÉO
+        # =================================================
+
+        elif bytes_per_frame == 4:
+
+            return bytes(
+                pcm
+            )
+
+
+        else:
+
+            print(
+                "⚠️ Format audio ProcTap inconnu :",
+                bytes_per_frame,
+                "octets/frame"
+            )
+
+            return None
+
+
+    except Exception as e:
+
+        print(
+            "⚠️ Conversion audio :",
+            e
+        )
+
+        return None
 
 
 # =========================================================
-# WAV WHISPER
+# WAV POUR WHISPER
 # =========================================================
 
 def create_wav(
@@ -1050,6 +1726,7 @@ def create_wav(
 ):
 
     buffer = io.BytesIO()
+
 
     with wave.open(
         buffer,
@@ -1072,13 +1749,17 @@ def create_wav(
             pcm
         )
 
-    buffer.seek(0)
+
+    buffer.seek(
+        0
+    )
+
 
     return buffer
 
 
 # =========================================================
-# VAD
+# AUDIO POUR SILERO
 # =========================================================
 
 def audio_for_vad(
@@ -1090,10 +1771,12 @@ def audio_for_vad(
         dtype=np.int16
     )
 
+
     if len(audio) == 0:
 
         return torch.zeros(
-            0
+            0,
+            dtype=torch.float32
         )
 
 
@@ -1102,48 +1785,80 @@ def audio_for_vad(
         CHANNELS
     )
 
+
     audio = audio.mean(
         axis=1
     )
+
 
     audio = audio.astype(
         np.float32
     )
 
 
+    # 48 kHz -> 16 kHz
+
     target_length = int(
+
         len(audio)
+
         * 16000
+
         / RATE
     )
 
 
-    old_positions = np.arange(
-        len(audio)
+    if target_length <= 0:
+
+        return torch.zeros(
+            0,
+            dtype=torch.float32
+        )
+
+
+    old_positions = (
+        np.arange(
+            len(audio)
+        )
     )
 
-    new_positions = np.linspace(
-        0,
-        len(audio) - 1,
-        target_length
+
+    new_positions = (
+        np.linspace(
+
+            0,
+
+            len(audio) - 1,
+
+            target_length
+        )
     )
 
 
     audio = np.interp(
+
         new_positions,
+
         old_positions,
+
         audio
     )
+
 
     audio /= 32768.0
 
 
     return torch.from_numpy(
+
         audio.astype(
             np.float32
         )
     )
 
+
+# =========================================================
+# DÉTECTION DE PAROLE
+# =========================================================
 
 def contains_speech(
     data
@@ -1153,31 +1868,41 @@ def contains_speech(
         data
     )
 
+
     if len(wav) == 0:
+
         return False
 
 
     with torch.no_grad():
 
-        timestamps = get_speech_timestamps(
-            wav,
-            vad_model,
+        timestamps = (
 
-            sampling_rate=16000,
+            get_speech_timestamps(
 
-            threshold=0.5,
+                wav,
 
-            min_speech_duration_ms=100,
+                vad_model,
 
-            min_silence_duration_ms=100
+                sampling_rate=16000,
+
+                threshold=0.5,
+
+                min_speech_duration_ms=100,
+
+                min_silence_duration_ms=100
+            )
         )
 
 
-    return len(timestamps) > 0
+    return (
+        len(timestamps)
+        > 0
+    )
 
 
 # =========================================================
-# NLLB
+# TRADUCTION NLLB
 # =========================================================
 
 def translate_text(
@@ -1186,12 +1911,13 @@ def translate_text(
     target
 ):
 
-    tokenizer = tokenizers[
-        source
-    ]
+    tokenizer = (
+        tokenizers[source]
+    )
 
 
     inputs = tokenizer(
+
         text,
 
         return_tensors="pt",
@@ -1204,9 +1930,10 @@ def translate_text(
 
     inputs = {
 
-        key: value.to(
-            TORCH_DEVICE
-        )
+        key:
+            value.to(
+                TRANSLATOR_DEVICE
+            )
 
         for key, value
         in inputs.items()
@@ -1214,7 +1941,11 @@ def translate_text(
 
 
     target_token = (
-        tokenizer.convert_tokens_to_ids(
+
+        tokenizer
+
+        .convert_tokens_to_ids(
+
             LANGUAGES[
                 target
             ]["nllb"]
@@ -1238,7 +1969,9 @@ def translate_text(
 
 
     return tokenizer.decode(
+
         outputs[0],
+
         skip_special_tokens=True
     )
 
@@ -1255,12 +1988,18 @@ phrase_queue = queue.Queue(
     maxsize=50
 )
 
-stop_event = threading.Event()
-reset_audio_event = threading.Event()
+
+stop_event = (
+    threading.Event()
+)
+
+reset_audio_event = (
+    threading.Event()
+)
 
 
 # =========================================================
-# CALLBACK PROCTAP
+# CALLBACK DISCORD
 # =========================================================
 
 def discord_audio_callback(
@@ -1269,25 +2008,29 @@ def discord_audio_callback(
 ):
 
     if stop_event.is_set():
+
         return
 
-    if not pcm:
-        return
 
-
-    # ProcessAudioCapture fournit du float32
-    # 48 kHz stéréo.
-
-    int16_pcm = float32_to_int16(
-        pcm
+    converted = (
+        convert_proctap_audio(
+            pcm,
+            frames
+        )
     )
+
+
+    if not converted:
+
+        return
 
 
     try:
 
         raw_audio_queue.put_nowait(
-            int16_pcm
+            converted
         )
+
 
     except queue.Full:
 
@@ -1302,10 +2045,17 @@ def capture_worker():
 
     capture = None
 
+
     while not stop_event.is_set():
 
-        discord = find_discord_root()
+        discord = (
+            find_discord_root()
+        )
 
+
+        # =================================================
+        # DISCORD PAS LANCÉ
+        # =================================================
 
         if discord is None:
 
@@ -1313,16 +2063,24 @@ def capture_worker():
                 "Discord n'est pas lancé."
             )
 
-            time.sleep(1)
+
+            time.sleep(
+                1
+            )
+
 
             continue
 
 
         try:
 
-            pid = discord.pid
+            pid = (
+                discord.pid
+            )
+
 
             print()
+
             print(
                 "🎧 Discord détecté"
             )
@@ -1333,13 +2091,14 @@ def capture_worker():
             )
 
             print(
-                "Capture : Discord + processus enfants"
+                "Capture : Discord uniquement"
             )
 
             print()
 
 
             signals.status_changed.emit(
+
                 "Discord connecté • "
                 "en attente d'une voix..."
             )
@@ -1348,17 +2107,27 @@ def capture_worker():
             reset_audio_event.set()
 
 
-            capture = ProcessAudioCapture(
-                pid=pid,
-                on_data=discord_audio_callback,
-                resample_quality="fast"
+            capture = (
+                ProcessAudioCapture(
+
+                    pid=pid,
+
+                    on_data=
+                        discord_audio_callback
+                )
             )
 
 
             capture.start()
 
 
-            while not stop_event.is_set():
+            # =================================================
+            # SURVEILLANCE
+            # =================================================
+
+            while (
+                not stop_event.is_set()
+            ):
 
                 if not psutil.pid_exists(
                     pid
@@ -1371,13 +2140,36 @@ def capture_worker():
                     break
 
 
-                if not capture.is_running:
+                try:
 
-                    print(
-                        "Capture audio arrêtée."
+                    running = getattr(
+                        capture,
+                        "is_running",
+                        True
                     )
 
-                    break
+
+                    if callable(
+                        running
+                    ):
+
+                        running = (
+                            running()
+                        )
+
+
+                    if running is False:
+
+                        print(
+                            "Capture Discord arrêtée."
+                        )
+
+                        break
+
+
+                except Exception:
+
+                    pass
 
 
                 time.sleep(
@@ -1388,11 +2180,14 @@ def capture_worker():
         except Exception as e:
 
             print()
+
             print(
                 "❌ Erreur capture Discord :"
             )
 
-            print(e)
+            print(
+                e
+            )
 
             print()
 
@@ -1414,6 +2209,7 @@ def capture_worker():
 
                     pass
 
+
                 capture = None
 
 
@@ -1422,52 +2218,74 @@ def capture_worker():
 
         if not stop_event.is_set():
 
-            time.sleep(1)
+            time.sleep(
+                1
+            )
 
 
 # =========================================================
-# VAD
+# VAD / DÉCOUPAGE EN PHRASES
 # =========================================================
 
 def vad_worker():
 
     pcm_buffer = bytearray()
 
+
     pre_roll_blocks = max(
+
         1,
-        PRE_ROLL_MS // BLOCK_MS
+
+        PRE_ROLL_MS
+        // BLOCK_MS
     )
+
 
     pre_roll = deque(
         maxlen=pre_roll_blocks
     )
 
+
     recording = False
+
     phrase = []
 
     silence_ms = 0
+
     phrase_duration_ms = 0
 
 
     def reset():
 
         nonlocal pcm_buffer
+
         nonlocal pre_roll
+
         nonlocal recording
+
         nonlocal phrase
+
         nonlocal silence_ms
+
         nonlocal phrase_duration_ms
 
-        pcm_buffer = bytearray()
+
+        pcm_buffer = (
+            bytearray()
+        )
+
 
         pre_roll = deque(
             maxlen=pre_roll_blocks
         )
 
+
         recording = False
+
         phrase = []
 
         silence_ms = 0
+
         phrase_duration_ms = 0
 
 
@@ -1482,9 +2300,12 @@ def vad_worker():
 
         try:
 
-            chunk = raw_audio_queue.get(
-                timeout=0.2
+            chunk = (
+                raw_audio_queue.get(
+                    timeout=0.2
+                )
             )
+
 
         except queue.Empty:
 
@@ -1497,15 +2318,19 @@ def vad_worker():
 
 
         while (
+
             len(pcm_buffer)
+
             >= BYTES_PER_BLOCK
         ):
 
             block = bytes(
+
                 pcm_buffer[
                     :BYTES_PER_BLOCK
                 ]
             )
+
 
             del pcm_buffer[
                 :BYTES_PER_BLOCK
@@ -1517,24 +2342,37 @@ def vad_worker():
             )
 
 
+            # =================================================
+            # EN ATTENTE
+            # =================================================
+
             if not recording:
 
                 if speech:
 
                     recording = True
 
+
                     phrase = list(
                         pre_roll
                     )
+
 
                     phrase.append(
                         block
                     )
 
+
                     pre_roll.clear()
 
+
                     silence_ms = 0
-                    phrase_duration_ms = BLOCK_MS
+
+
+                    phrase_duration_ms = (
+                        BLOCK_MS
+                    )
+
 
                 else:
 
@@ -1543,11 +2381,16 @@ def vad_worker():
                     )
 
 
+            # =================================================
+            # PHRASE EN COURS
+            # =================================================
+
             else:
 
                 phrase.append(
                     block
                 )
+
 
                 phrase_duration_ms += (
                     BLOCK_MS
@@ -1558,6 +2401,7 @@ def vad_worker():
 
                     silence_ms = 0
 
+
                 else:
 
                     silence_ms += (
@@ -1566,59 +2410,90 @@ def vad_worker():
 
 
                 finished = (
+
                     silence_ms
+
                     >= END_SILENCE_MS
                 )
 
+
                 too_long = (
+
                     phrase_duration_ms
+
                     >= MAX_PHRASE_MS
                 )
 
 
-                if finished or too_long:
+                if (
+                    finished
+                    or too_long
+                ):
 
                     pcm = b"".join(
                         phrase
                     )
 
 
+                    source, target = (
+                        get_direction()
+                    )
+
+
                     try:
 
                         phrase_queue.put_nowait(
-                            pcm
+                            (
+                                pcm,
+                                source,
+                                target
+                            )
                         )
+
 
                     except queue.Full:
 
-                        pass
+                        print(
+                            "⚠️ Queue transcription pleine."
+                        )
 
 
                     recording = False
+
                     phrase = []
 
                     silence_ms = 0
+
                     phrase_duration_ms = 0
 
                     pre_roll.clear()
 
 
 # =========================================================
-# WHISPER + NLLB
+# WHISPER + TRADUCTION
 # =========================================================
 
 def transcription_worker():
 
     while (
+
         not stop_event.is_set()
-        or not phrase_queue.empty()
+
+        or
+
+        not phrase_queue.empty()
     ):
 
         try:
 
-            pcm = phrase_queue.get(
+            (
+                pcm,
+                source,
+                target
+            ) = phrase_queue.get(
                 timeout=0.1
             )
+
 
         except queue.Empty:
 
@@ -1627,19 +2502,18 @@ def transcription_worker():
 
         try:
 
-            source, target = (
-                get_direction()
-            )
-
+            print()
 
             print(
-                f"\n🧠 Transcription "
+                f"🧠 Transcription "
                 f"{source.upper()}..."
             )
 
 
-            wav_buffer = create_wav(
-                pcm
+            wav_buffer = (
+                create_wav(
+                    pcm
+                )
             )
 
 
@@ -1673,15 +2547,23 @@ def transcription_worker():
 
 
             if not original:
+
                 continue
 
 
-            translated = translate_text(
-                original,
-                source,
-                target
+            translated = (
+                translate_text(
+
+                    original,
+
+                    source,
+
+                    target
+                )
             )
 
+
+            print()
 
             print(
                 LANGUAGES[
@@ -1689,6 +2571,7 @@ def transcription_worker():
                 ]["flag"],
                 original
             )
+
 
             print(
                 LANGUAGES[
@@ -1698,20 +2581,34 @@ def transcription_worker():
             )
 
 
+            print()
+
+
             signals.translation_ready.emit(
+
                 original,
+
                 translated,
+
                 source,
+
                 target
             )
 
 
         except Exception as e:
 
+            print()
+
             print(
-                "❌ Erreur transcription :",
+                "❌ Erreur transcription/traduction :"
+            )
+
+            print(
                 e
             )
+
+            print()
 
 
         finally:
@@ -1720,28 +2617,37 @@ def transcription_worker():
 
 
 # =========================================================
-# QT APP
+# QT
 # =========================================================
 
 app = QApplication(
     sys.argv
 )
 
+
 app.setApplicationName(
-    "Valod Translator"
+    APP_NAME
 )
+
 
 app.setQuitOnLastWindowClosed(
     False
 )
 
 
-overlay = SubtitleOverlay()
+# =========================================================
+# OVERLAY
+# =========================================================
+
+overlay = (
+    SubtitleOverlay()
+)
+
 overlay.show()
 
 
 # =========================================================
-# ICONE
+# ICÔNE TRAY
 # =========================================================
 
 pixmap = QPixmap(
@@ -1749,19 +2655,24 @@ pixmap = QPixmap(
     64
 )
 
+
 pixmap.fill(
     Qt.transparent
 )
+
 
 painter = QPainter(
     pixmap
 )
 
+
 painter.setRenderHint(
     QPainter.Antialiasing
 )
 
+
 painter.setBrush(
+
     QColor(
         45,
         120,
@@ -1769,9 +2680,11 @@ painter.setBrush(
     )
 )
 
+
 painter.setPen(
     Qt.NoPen
 )
+
 
 painter.drawEllipse(
     4,
@@ -1780,7 +2693,9 @@ painter.drawEllipse(
     56
 )
 
+
 painter.setPen(
+
     QColor(
         255,
         255,
@@ -1788,24 +2703,35 @@ painter.setPen(
     )
 )
 
+
 icon_font = QFont(
     "Segoe UI",
     24
 )
 
-icon_font.setBold(True)
+
+icon_font.setBold(
+    True
+)
+
 
 painter.setFont(
     icon_font
 )
 
+
 painter.drawText(
+
     pixmap.rect(),
+
     Qt.AlignCenter,
+
     "V"
 )
 
+
 painter.end()
+
 
 tray_icon = QIcon(
     pixmap
@@ -1813,33 +2739,48 @@ tray_icon = QIcon(
 
 
 # =========================================================
-# TRAY
+# SYSTEM TRAY
 # =========================================================
 
 tray = QSystemTrayIcon(
+
     tray_icon,
+
     app
 )
 
+
 tray.setToolTip(
-    "Valod Translator"
+
+    f"{APP_NAME} "
+    f"v{APP_VERSION}"
 )
+
 
 menu = QMenu()
 
 
+# =========================================================
+# CAPTURE
+# =========================================================
+
 capture_action = QAction(
+
     "🎧 Capture : Discord uniquement",
+
     menu
 )
+
 
 capture_action.setEnabled(
     False
 )
 
+
 menu.addAction(
     capture_action
 )
+
 
 menu.addSeparator()
 
@@ -1849,13 +2790,17 @@ menu.addSeparator()
 # =========================================================
 
 move_action = QAction(
+
     "Déverrouiller / déplacer l'overlay",
+
     menu
 )
+
 
 move_action.setCheckable(
     True
 )
+
 
 move_action.setChecked(
     not overlay.locked
@@ -1875,24 +2820,30 @@ move_action.toggled.connect(
     toggle_move_mode
 )
 
+
 menu.addAction(
     move_action
 )
+
 
 menu.addSeparator()
 
 
 # =========================================================
-# MODES
+# LANGUES
 # =========================================================
 
-translation_menu = menu.addMenu(
-    "Sens de traduction"
+translation_menu = (
+    menu.addMenu(
+        "Sens de traduction"
+    )
 )
+
 
 direction_group = QActionGroup(
     translation_menu
 )
+
 
 direction_group.setExclusive(
     True
@@ -1948,23 +2899,36 @@ def make_language_callback(
                 target
             )
 
+
     return callback
 
 
-for label, source, target in MODES:
+for (
+    label,
+    source,
+    target
+) in MODES:
 
     action = QAction(
         label,
         translation_menu
     )
 
+
     action.setCheckable(
         True
     )
 
+
     if (
-        source == current_source
-        and target == current_target
+
+        source
+        == current_source
+
+        and
+
+        target
+        == current_target
     ):
 
         action.setChecked(
@@ -1973,15 +2937,18 @@ for label, source, target in MODES:
 
 
     action.triggered.connect(
+
         make_language_callback(
             source,
             target
         )
     )
 
+
     direction_group.addAction(
         action
     )
+
 
     translation_menu.addAction(
         action
@@ -1994,14 +2961,19 @@ for label, source, target in MODES:
 
 menu.addSeparator()
 
+
 recenter_action = QAction(
+
     "Recentrer l'overlay",
+
     menu
 )
+
 
 recenter_action.triggered.connect(
     overlay.move_to_bottom
 )
+
 
 menu.addAction(
     recenter_action
@@ -2009,23 +2981,42 @@ menu.addAction(
 
 
 # =========================================================
-# CREDIT
+# VERSION / CREDIT
 # =========================================================
 
 menu.addSeparator()
 
-credit_action = QAction(
-    "made by valod",
+
+version_action = QAction(
+
+    f"{APP_NAME} v{APP_VERSION}",
+
     menu
 )
+
+
+version_action.setEnabled(
+    False
+)
+
+
+menu.addAction(
+    version_action
+)
+
+
+credit_action = QAction(
+
+    "made by valod",
+
+    menu
+)
+
 
 credit_action.setEnabled(
     False
 )
 
-menu.addAction(
-    credit_action
-)
 
 
 # =========================================================
@@ -2034,10 +3025,14 @@ menu.addAction(
 
 menu.addSeparator()
 
+
 quit_action = QAction(
+
     "Quitter",
+
     menu
 )
+
 
 menu.addAction(
     quit_action
@@ -2047,6 +3042,7 @@ menu.addAction(
 tray.setContextMenu(
     menu
 )
+
 
 tray.show()
 
@@ -2060,15 +3056,22 @@ def stop_program(
 ):
 
     if stop_event.is_set():
+
         return
 
+
+    print()
+
     print(
-        "\nArrêt..."
+        "Arrêt de Valod Translator..."
     )
+
 
     stop_event.set()
 
+
     tray.hide()
+
 
     app.quit()
 
@@ -2077,17 +3080,21 @@ quit_action.triggered.connect(
     stop_program
 )
 
+
 signal.signal(
     signal.SIGINT,
     stop_program
 )
 
 
+# Permet à Ctrl+C d'être traité par Qt
 timer = QTimer()
+
 
 timer.timeout.connect(
     lambda: None
 )
+
 
 timer.start(
     200
@@ -2099,37 +3106,84 @@ timer.start(
 # =========================================================
 
 capture_thread = threading.Thread(
+
     target=capture_worker,
-    daemon=True
+
+    daemon=True,
+
+    name="DiscordCapture"
 )
+
 
 vad_thread = threading.Thread(
+
     target=vad_worker,
-    daemon=True
+
+    daemon=True,
+
+    name="VAD"
 )
 
+
 transcription_thread = threading.Thread(
+
     target=transcription_worker,
-    daemon=True
+
+    daemon=True,
+
+    name="Transcription"
 )
 
 
 capture_thread.start()
+
 vad_thread.start()
+
 transcription_thread.start()
 
 
+# =========================================================
+# READY
+# =========================================================
+
 print()
+
 print(
-    "🎧 Capture : Discord uniquement"
+    "========================================"
 )
+
 print(
-    "YouTube / Opera / jeux ne doivent plus être capturés."
+    "🎧 VALOD TRANSLATOR ACTIF"
 )
+
+print(
+    "========================================"
+)
+
+print()
+
+print(
+    "Capture : Discord uniquement"
+)
+
+print(
+    f"Version : {APP_VERSION}"
+)
+
+print(
+    "made by valod"
+)
+
 print()
 
 
-exit_code = app.exec()
+# =========================================================
+# QT LOOP
+# =========================================================
+
+exit_code = (
+    app.exec()
+)
 
 
 # =========================================================
@@ -2138,17 +3192,21 @@ exit_code = app.exec()
 
 stop_event.set()
 
+
 capture_thread.join(
     timeout=3
 )
+
 
 vad_thread.join(
     timeout=2
 )
 
+
 transcription_thread.join(
     timeout=3
 )
+
 
 sys.exit(
     exit_code
